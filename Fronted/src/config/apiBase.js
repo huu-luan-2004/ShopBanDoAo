@@ -1,64 +1,39 @@
 /**
- * Base URL API — luôn là URL tuyệt đối https://.../api trong production.
- *
- * Lỗi thường gặp: VITE_API_BASE_URL = `/api` hoặc trùng domain site tĩnh (GitHub Pages)
- * → axios gọi nhầm ndsports.id.vn/api → 404 login/register.
- * Hoặc build cũ vẫn gọi /auth/google-login — dùng google-id-token + GOOGLE_CLIENT_ID trên Render.
+ * Base URL API cho frontend
  */
-const DEFAULT_PRODUCTION_API = 'https://shopbandoao.onrender.com/api';
-
-function normalizeAbsoluteApiRoot(raw) {
-  const v = raw.trim().replace(/\/+$/, '');
-  if (!v) return '';
-  if (!/^https?:\/\//i.test(v)) {
-    return v;
-  }
-  if (!/\/api$/i.test(v)) {
-    return `${v}/api`;
-  }
-  return v;
-}
-
-function isSameHostAsBrowser(apiRoot) {
-  if (typeof window === 'undefined') return false;
-  try {
-    return new URL(apiRoot).hostname === window.location.hostname;
-  } catch {
-    return false;
-  }
-}
 
 export function getApiBaseUrl() {
   const fromEnv = import.meta.env.VITE_API_BASE_URL?.trim();
 
+  // Development
   if (import.meta.env.DEV) {
-    return 'http://localhost:3000/api';
+    return fromEnv || '/api';
   }
 
-  if (import.meta.env.PROD) {
-    // URL tương đối (/api, ...) — không dùng được làm baseURL axios (sẽ gọi vào domain tĩnh)
-    if (fromEnv && (fromEnv.startsWith('/') || /^api\/?$/i.test(fromEnv))) {
-      return DEFAULT_PRODUCTION_API;
-    }
-    if (!fromEnv) {
-      return DEFAULT_PRODUCTION_API;
-    }
-    const normalized = normalizeAbsoluteApiRoot(fromEnv);
-    if (!normalized.startsWith('http')) {
-      return DEFAULT_PRODUCTION_API;
-    }
-    if (isSameHostAsBrowser(normalized)) {
-      return DEFAULT_PRODUCTION_API;
-    }
-    return normalized;
+  // Production
+  if (fromEnv) {
+    const v = fromEnv.trim().replace(/\/+$/, '');
+    return v.endsWith('/api') ? v : `${v}/api`;
   }
 
-  return fromEnv ? normalizeAbsoluteApiRoot(fromEnv) : '';
+  // Default
+  return 'https://api.sportwear.io.vn/api';
 }
 
-/** Origin backend (uploads, ảnh) — không có /api */
+/**
+ * Origin thuần (không path)
+ */
 export function getApiOrigin() {
   const base = getApiBaseUrl();
-  if (!base) return '';
-  return base.replace(/\/api\/?$/, '');
+  
+  if (!/^https?:\/\//i.test(base)) {
+    return window.location.origin;
+  }
+  
+  try {
+    const url = new URL(base);
+    return url.origin;
+  } catch {
+    return base.replace(/\/api.*$/, '');
+  }
 }

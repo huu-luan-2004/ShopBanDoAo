@@ -20,7 +20,7 @@ import './Home.css';
 
 const PLACEHOLDER = '/placeholder-category.svg';
 const FALLBACK_HERO_IMG =
-  'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=600&q=80&auto=format&fit=crop';
+  'https://suckhoedoisong.qltns.mediacdn.vn/324455921873985536/2025/6/24/bai-tap-3-1750740292302487178075.jpg';
 
 const CTA_ICON_MAP = {
   shopping: FiShoppingBag,
@@ -237,12 +237,8 @@ const Home = () => {
               >
                 <div className="hero-image-glow" aria-hidden />
                 <img
-                  src={
-                    resolveMediaUrl(bannerMerged?.heroImageUrl) ||
-                    bannerMerged?.heroImageUrl ||
-                    FALLBACK_HERO_IMG
-                  }
-                  alt=""
+                  src="https://suckhoedoisong.qltns.mediacdn.vn/324455921873985536/2025/6/24/bai-tap-3-1750740292302487178075.jpg"
+                  alt="Banner Thể Thao"
                   className="hero-image"
                   fetchpriority="high"
                   decoding="async"
