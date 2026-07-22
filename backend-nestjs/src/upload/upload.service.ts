@@ -1,10 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { mkdir, writeFile } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, extname } from 'path';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { extname } from 'path';
 import { randomBytes } from 'crypto';
-import { v2 as cloudinary } from 'cloudinary';
 
 /** File từ multer memoryStorage */
 export interface MemoryUploadedFile {
@@ -13,80 +11,70 @@ export interface MemoryUploadedFile {
   originalname: string;
 }
 
-/**
- * Upload ảnh:
- * - Nếu có CLOUDINARY_* → đẩy lên Cloudinary, trả `secure_url` (bền trên Render / redeploy).
- * - Không có → ghi `./uploads` + URL tương đối (dev); production nên cấu Cloudinary.
- */
 @Injectable()
 export class UploadService {
   private readonly logger = new Logger(UploadService.name);
-  private cloudinaryConfigured = false;
+  private s3Client: S3Client | null = null;
 
-  constructor(private readonly config: ConfigService) {}
-
-  private get cloudFolder(): string {
-    return (
-      this.config.get<string>('CLOUDINARY_FOLDER')?.trim() || 'shop-uploads'
-    );
+  constructor(private readonly config: ConfigService) {
+    this.initS3Client();
   }
 
-  private ensureCloudinary(): boolean {
-    const cloudName = this.config.get<string>('CLOUDINARY_CLOUD_NAME')?.trim();
-    const apiKey = this.config.get<string>('CLOUDINARY_API_KEY')?.trim();
-    const apiSecret = this.config.get<string>('CLOUDINARY_API_SECRET')?.trim();
-    if (!cloudName || !apiKey || !apiSecret) {
-      return false;
-    }
-    if (!this.cloudinaryConfigured) {
-      cloudinary.config({
-        cloud_name: cloudName,
-        api_key: apiKey,
-        api_secret: apiSecret,
+  /** Khởi tạo AWS S3 Client */
+  private initS3Client() {
+    const region = this.config.get<string>('AWS_REGION')?.trim();
+    const accessKeyId = this.config.get<string>('AWS_ACCESS_KEY_ID')?.trim();
+    const secretAccessKey = this.config.get<string>('AWS_SECRET_ACCESS_KEY')?.trim();
+
+    if (region && accessKeyId && secretAccessKey) {
+      this.s3Client = new S3Client({
+        region,
+        credentials: {
+          accessKeyId,
+          secretAccessKey,
+        },
       });
-      this.cloudinaryConfigured = true;
-    }
-    return true;
-  }
-
-  /** Chuẩn /uploads/filename — nối API_PUBLIC_URL hoặc PUBLIC_URL nếu có */
-  private absoluteFileUrl(relativePath: string): string {
-    const rel = relativePath.startsWith('/')
-      ? relativePath
-      : `/${relativePath}`;
-    const base =
-      this.config.get<string>('API_PUBLIC_URL')?.trim() ||
-      this.config.get<string>('PUBLIC_URL')?.trim();
-    if (!base) return rel;
-    const origin = base.replace(/\/+$/, '');
-    return `${origin}${rel}`;
-  }
-
-  private async ensureUploadsDir(): Promise<void> {
-    const dir = join(process.cwd(), 'uploads');
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
+      this.logger.log('AWS S3 Client đã được khởi tạo thành công!');
+    } else {
+      this.logger.warn('Khai báo AWS S3 chưa đủ trong biến môi trường!');
     }
   }
 
-  private async saveBufferToDisk(file: MemoryUploadedFile): Promise<string> {
-    await this.ensureUploadsDir();
+  /** Tải file lên AWS S3 */
+  private async uploadToS3(file: MemoryUploadedFile): Promise<string> {
+    if (!this.s3Client) {
+      throw new Error('S3 Client chưa được cấu hình đúng.');
+    }
+
+    const bucketName = this.config.get<string>('AWS_S3_BUCKET_NAME')?.trim();
+    const cloudFrontDomain = this.config.get<string>('CLOUDFRONT_DOMAIN')?.trim(); // Ví dụ: d12345.cloudfront.net hoặc https://cdn.yourdomain.com
+    const region = this.config.get<string>('AWS_REGION')?.trim();
+
+    if (!bucketName) {
+      throw new Error('AWS_S3_BUCKET_NAME chưa được khai báo.');
+    }
+
     const ext = extname(file.originalname) || '.jpg';
-    const name = `${Date.now()}-${randomBytes(6).toString('hex')}${ext}`;
-    const dest = join(process.cwd(), 'uploads', name);
-    await writeFile(dest, file.buffer);
-    return this.absoluteFileUrl(`/uploads/${name}`);
-  }
+    const key = `shop-uploads/${Date.now()}-${randomBytes(6).toString('hex')}${ext}`;
 
-  private async uploadToCloudinary(file: MemoryUploadedFile): Promise<string> {
-    const dataUri = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-    const result = await cloudinary.uploader.upload(dataUri, {
-      folder: this.cloudFolder,
-      resource_type: 'auto',
-      use_filename: true,
-      unique_filename: true,
+    const command = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype,
     });
-    return result.secure_url;
+
+    await this.s3Client.send(command);
+
+    // Trả về CloudFront URL (nếu có cấu hình) hoặc trả về direct S3 URL
+    if (cloudFrontDomain) {
+      const domain = cloudFrontDomain.replace(/\/+$/, '');
+      const prefix = domain.startsWith('http') ? domain : `https://${domain}`;
+      return `${prefix}/${key}`;
+    }
+
+    // Direct S3 URL fallback
+    return `https://${bucketName}.s3.${region}.amazonaws.com/${key}`;
   }
 
   async uploadFile(file: MemoryUploadedFile | undefined) {
@@ -94,15 +82,7 @@ export class UploadService {
       return { message: 'Không có file nào được tải lên!', success: false };
     }
     try {
-      if (this.ensureCloudinary()) {
-        const url = await this.uploadToCloudinary(file);
-        return {
-          message: 'Tải ảnh thành công',
-          success: true,
-          url,
-        };
-      }
-      const url = await this.saveBufferToDisk(file);
+      const url = await this.uploadToS3(file);
       return {
         message: 'Tải ảnh thành công',
         success: true,
@@ -110,7 +90,7 @@ export class UploadService {
       };
     } catch (e) {
       this.logger.error(
-        `uploadFile: ${e instanceof Error ? e.message : String(e)}`,
+        `uploadFile Error: ${e instanceof Error ? e.message : String(e)}`,
       );
       return {
         message: 'Tải ảnh thất bại',
@@ -125,17 +105,10 @@ export class UploadService {
     }
     try {
       const urls: string[] = [];
-      if (this.ensureCloudinary()) {
-        for (const f of files) {
-          if (f?.buffer) {
-            urls.push(await this.uploadToCloudinary(f));
-          }
-        }
-      } else {
-        for (const f of files) {
-          if (f?.buffer) {
-            urls.push(await this.saveBufferToDisk(f));
-          }
+      for (const f of files) {
+        if (f?.buffer) {
+          const url = await this.uploadToS3(f);
+          urls.push(url);
         }
       }
       if (urls.length === 0) {
@@ -148,7 +121,7 @@ export class UploadService {
       };
     } catch (e) {
       this.logger.error(
-        `uploadMultipleFiles: ${e instanceof Error ? e.message : String(e)}`,
+        `uploadMultipleFiles Error: ${e instanceof Error ? e.message : String(e)}`,
       );
       return {
         message: 'Tải ảnh thất bại',
