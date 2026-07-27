@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -21,6 +21,7 @@ import { UploadModule } from './upload/upload.module';
 import { SiteSettingsModule } from './site-settings/site-settings.module';
 import { ChatModule } from './chat/chat.module';
 import { PromotionsModule } from './promotions/promotions.module';
+import { AiModule } from './ai/ai.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -54,8 +55,10 @@ import { PromotionsModule } from './promotions/promotions.module';
     SiteSettingsModule,
     ChatModule,
     PromotionsModule,
+    AiModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
 export class AppModule {}
+
